@@ -101,6 +101,26 @@ extern "C" {
 #endif // __cplusplus
 
 /**
+ * Configures Discord Rich Presence. `show_rank` is the player's in-game
+ * rank-display preference; when false, the presence omits the rank badge.
+ */
+void slprs_exi_device_configure_discord_rpc(uintptr_t exi_device_instance_ptr,
+                                            bool is_enabled,
+                                            bool show_rank);
+
+/**
+ * Pushes the current Slippi matchmaking state to Discord Rich Presence. The
+ * Rust side edge-detects and only re-renders when something changes.
+ * `opponent_name` may be null or empty when unknown; `opponent_rank` is
+ * negative when unknown.
+ */
+void slprs_exi_device_update_matchmaking_state(uintptr_t exi_device_instance_ptr,
+                                               uint8_t process_state,
+                                               uint8_t online_mode,
+                                               const char *opponent_name,
+                                               int8_t opponent_rank);
+
+/**
  * Creates and leaks a shadow EXI device with the provided configuration.
  *
  * The C++ (Dolphin) side of things should call this and pass the appropriate arguments. At
