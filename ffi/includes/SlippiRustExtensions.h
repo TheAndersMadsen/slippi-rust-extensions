@@ -121,6 +121,20 @@ void slprs_exi_device_update_matchmaking_state(uintptr_t exi_device_instance_ptr
                                                int8_t opponent_rank);
 
 /**
+ * Pushes the current Melee scene and character-select state to Discord Rich
+ * Presence, mirroring how matchmaking state is pushed. `css_char_ids` points
+ * to four external Melee character IDs (one per port); `0xFF` marks an empty
+ * port. `local_port` is the 0-based port of the local player. The Rust side
+ * edge-detects and only re-renders when something changes.
+ */
+void slprs_exi_device_update_scene_state(uintptr_t exi_device_instance_ptr,
+                                         uint8_t major_scene,
+                                         uint8_t minor_scene,
+                                         const uint8_t *css_char_ids,
+                                         uint8_t local_port,
+                                         uint8_t stage_id);
+
+/**
  * Creates and leaks a shadow EXI device with the provided configuration.
  *
  * The C++ (Dolphin) side of things should call this and pass the appropriate arguments. At

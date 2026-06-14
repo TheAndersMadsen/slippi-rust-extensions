@@ -44,8 +44,9 @@ pub(crate) fn character_asset(id: u8) -> String {
     }
 }
 
-/// Returns the display name for an internal stage ID, if known.
-fn stage_internal_name(internal_id: u16) -> Option<&'static str> {
+/// Returns the display name for an internal stage ID, the value Melee keeps for
+/// the currently loaded stage (as opposed to the external `Game Start` ID).
+pub(crate) fn stage_name_internal(internal_id: u16) -> Option<&'static str> {
     Some(match internal_id {
         2 => "Princess Peach's Castle",
         3 => "Rainbow Cruise",
@@ -61,8 +62,8 @@ fn stage_internal_name(internal_id: u16) -> Option<&'static str> {
         13 => "Green Greens",
         14 => "Corneria",
         15 => "Venom",
-        16 => "Pokemon Stadium",
-        17 => "Poke Floats",
+        16 => "Pokémon Stadium",
+        17 => "Poké Floats",
         18 => "Mute City",
         19 => "Big Blue",
         20 => "Onett",
@@ -118,13 +119,22 @@ fn external_to_internal(external_id: u16) -> Option<u16> {
 
 /// Returns the display name for an external stage ID, if known.
 pub(crate) fn stage_name(external_id: u16) -> Option<&'static str> {
-    stage_internal_name(external_to_internal(external_id)?)
+    stage_name_internal(external_to_internal(external_id)?)
 }
 
 /// Returns the Discord asset key for an external stage ID.
 pub(crate) fn stage_asset(external_id: u16) -> String {
     match external_to_internal(external_id) {
         Some(internal_id) => format!("stage{internal_id}"),
+        None => "questionmark".to_string(),
+    }
+}
+
+/// Returns the Discord asset key for an internal stage ID. The stage assets are
+/// keyed by internal ID, so this matches what [`stage_asset`] produces.
+pub(crate) fn stage_asset_internal(internal_id: u16) -> String {
+    match stage_name_internal(internal_id) {
+        Some(_) => format!("stage{internal_id}"),
         None => "questionmark".to_string(),
     }
 }

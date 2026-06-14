@@ -14,6 +14,7 @@ mod content;
 mod melee;
 mod menu;
 mod presence;
+mod scene;
 mod text;
 
 mod parser;
@@ -33,6 +34,16 @@ pub(crate) enum Message {
         online_mode: u8,
         opponent_name: Option<String>,
         opponent_rank: i8,
+    },
+
+    /// A scene + character-select snapshot pushed from the C++ side each
+    /// menu-frame heartbeat. Drives character-select and offline-scene presence.
+    Scene {
+        major: u8,
+        minor: u8,
+        char_ids: [u8; 4],
+        local_port: u8,
+        stage_id: u8,
     },
 
     /// The player's in-game rank-display setting changed.
@@ -89,6 +100,21 @@ impl DiscordHandler {
 
         if let Err(error) = self.sender.send(message) {
             tracing::warn!(target: Log::DiscordRpc, ?error, "Unable to dispatch matchmaking state to presence thread");
+        }
+    }
+
+    /// Forwards a Slippi scene + character-select snapshot to the presence thread.
+    pub fn update_scene_state(&self, major: u8, minor: u8, char_ids: [u8; 4], local_port: u8, stage_id: u8) {
+        let message = Message::Scene {
+            major,
+            minor,
+            char_ids,
+            local_port,
+            stage_id,
+        };
+
+        if let Err(error) = self.sender.send(message) {
+            tracing::warn!(target: Log::DiscordRpc, ?error, "Unable to dispatch scene state to presence thread");
         }
     }
 

@@ -82,7 +82,7 @@ pub(crate) fn game_details(game: &GameState, set_score: &SetScore) -> String {
     let mut details = mode.to_string();
 
     if game.info.game_number > 0 {
-        details.push_str(&format!(" — Game {}", game.info.game_number));
+        details.push_str(&format!(" - Game {}", game.info.game_number));
     }
 
     if game.info.tiebreaker_number > 0 {
@@ -97,7 +97,7 @@ pub(crate) fn game_details(game: &GameState, set_score: &SetScore) -> String {
             .map(|p| set_score.wins[p.port as usize].to_string())
             .collect();
 
-        details.push_str(&format!(" — Set {}", wins.join("–")));
+        details.push_str(&format!(" - Set {}", wins.join("-")));
     }
 
     details
@@ -121,12 +121,12 @@ pub(crate) fn game_state_line(game: &GameState) -> String {
     };
 
     if game.ended {
-        return format!("{} vs {} — Game over", name(0), name(1));
+        return format!("{} vs {} - Game over", name(0), name(1));
     }
 
     let stocks = |i: usize| game.stocks[players[i].port as usize];
 
-    format!("{} {} – {} {}", name(0), stocks(0), stocks(1), name(1))
+    format!("{} {} - {} {}", name(0), stocks(0), stocks(1), name(1))
 }
 
 /// Current Unix time in seconds.

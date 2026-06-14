@@ -14,6 +14,7 @@ use crate::content::{GameState, PresenceContent, SetScore, game_details, game_st
 use crate::melee;
 use crate::menu::{MatchmakingState, ProcessState};
 use crate::parser::{EventParser, SlpEvent};
+use crate::scene::SceneState;
 
 /// The Discord application that hosts the presence image assets.
 const DISCORD_CLIENT_ID: &str = "1096595344600604772";
@@ -44,6 +45,7 @@ pub(crate) struct PresenceRunner {
     game: Option<GameState>,
     set_score: SetScore,
     matchmaking: MatchmakingState,
+    scene: SceneState,
     user_manager: Option<UserManager>,
     show_rank: bool,
 }
@@ -80,6 +82,17 @@ pub(crate) fn run(receiver: Receiver<Message>, user_manager: Option<UserManager>
                 runner.handle_matchmaking(state);
             },
 
+            Some(Message::Scene {
+                major,
+                minor,
+                char_ids,
+                local_port,
+                stage_id,
+            }) => {
+                let state = SceneState::from_ffi(major, minor, char_ids, local_port, stage_id);
+                runner.handle_scene(state);
+            },
+
             Some(Message::ShowRank(show_rank)) => {
                 if runner.show_rank != show_rank {
                     runner.show_rank = show_rank;
@@ -113,6 +126,7 @@ impl PresenceRunner {
             game: None,
             set_score: SetScore::default(),
             matchmaking: MatchmakingState::default(),
+            scene: SceneState::default(),
             user_manager,
             // Default on; Dolphin overrides via set_show_rank.
             show_rank: true,
@@ -216,6 +230,30 @@ impl PresenceRunner {
         self.pending_update = true;
     }
 
+    /// Folds a pushed scene snapshot into presence state. A live game keeps
+    /// ownership of presence; returning to the character-select screen clears a
+    /// finished game so its result stops showing.
+    fn handle_scene(&mut self, state: SceneState) {
+        if state == self.scene {
+            return;
+        }
+
+        // Log only on a real scene change, not on every cursor move, so the
+        // raw major/minor is visible while testing without flooding the log.
+        if (state.major, state.minor) != (self.scene.major, self.scene.minor) {
+            tracing::info!(target: Log::DiscordRpc, major = state.major, minor = state.minor, "Scene changed");
+        }
+
+        // Back on the character-select screen with a finished game still around:
+        // drop it so the offline result stops showing.
+        if state.is_css() && self.game.as_ref().is_some_and(|game| game.ended) {
+            self.game = None;
+        }
+
+        self.scene = state;
+        self.pending_update = true;
+    }
+
     /// Pushes the current state to Discord, respecting the rate limit.
     fn flush(&mut self) {
         if !self.pending_update {
@@ -297,42 +335,61 @@ impl PresenceRunner {
 
     /// Decides what presence to show right now, or `None` to show nothing.
     fn content(&self) -> Option<PresenceContent> {
+        // A live or just-finished game always wins.
         if let Some(game) = &self.game {
             return Some(self.game_content(game));
         }
 
+        // The online matchmaking flow owns presence whenever it's active.
+        if !matches!(self.matchmaking.process, ProcessState::Idle | ProcessState::Error) {
+            return Some(self.matchmaking_content());
+        }
+
+        // Offline scene presence: character select, training, the 1P modes,
+        // offline Vs before the game starts producing replay data.
+        if let Some(content) = self.scene_content() {
+            return Some(content);
+        }
+
+        // Default: the online idle baseline ("In menus").
+        Some(self.matchmaking_content())
+    }
+
+    /// Presence for the online menu and matchmaking flow, keyed off the pushed
+    /// `MatchmakingState`.
+    fn matchmaking_content(&self) -> PresenceContent {
         let mm = &self.matchmaking;
         match mm.process {
             ProcessState::Idle | ProcessState::Error => {
                 let (large_image, large_text) = self.player_badge();
-                Some(PresenceContent {
+                PresenceContent {
                     details: "Slippi Online".to_string(),
                     state: "In menus".to_string(),
                     large_image,
                     large_text,
                     ..Default::default()
-                })
+                }
             },
 
             ProcessState::Initializing | ProcessState::Matchmaking => {
                 let (large_image, large_text) = self.player_badge();
                 let details = match mm.mode {
-                    Some(mode) => format!("In queue — {}", mode.name()),
+                    Some(mode) => format!("In queue - {}", mode.name()),
                     None => "In queue".to_string(),
                 };
-                Some(PresenceContent {
+                PresenceContent {
                     details,
                     state: "Searching for an opponent".to_string(),
                     large_image,
                     large_text,
                     party: Some((1, 2)),
                     ..Default::default()
-                })
+                }
             },
 
             ProcessState::OpponentConnecting => {
                 let (large_image, large_text) = self.opponent_badge();
-                Some(PresenceContent {
+                PresenceContent {
                     details: "Opponent found".to_string(),
                     state: match &mm.opponent_name {
                         Some(name) => format!("vs {name}"),
@@ -342,12 +399,12 @@ impl PresenceRunner {
                     large_text,
                     party: Some((2, 2)),
                     ..Default::default()
-                })
+                }
             },
 
             ProcessState::ConnectionSuccess => {
                 let (large_image, large_text) = self.player_badge();
-                Some(PresenceContent {
+                PresenceContent {
                     details: "Starting match...".to_string(),
                     state: match &mm.opponent_name {
                         Some(name) => format!("vs {name}"),
@@ -357,9 +414,79 @@ impl PresenceRunner {
                     large_text,
                     party: Some((2, 2)),
                     ..Default::default()
-                })
+                }
             },
         }
+    }
+
+    /// Presence for the offline scenes that never reach the replay stream: the
+    /// character-select screen (showing the local player's hovered character)
+    /// and the recognized offline modes. `None` when the current scene isn't
+    /// one we render, so the caller falls back to the menu baseline.
+    fn scene_content(&self) -> Option<PresenceContent> {
+        let scene = &self.scene;
+
+        if scene.is_css() {
+            let local_char = scene.local_char_id();
+
+            let (small_image, small_text) = match local_char {
+                Some(id) => (Some(melee::character_asset(id)), melee::character_name(id).map(String::from)),
+                None => (None, None),
+            };
+
+            let (large_image, large_text) = self.player_badge();
+
+            return Some(PresenceContent {
+                details: "Choosing characters".to_string(),
+                state: match local_char.and_then(melee::character_name) {
+                    Some(name) => name.to_string(),
+                    None => "Character select".to_string(),
+                },
+                large_image,
+                large_text,
+                small_image,
+                small_text,
+                ..Default::default()
+            });
+        }
+
+        let mode = scene.mode_label()?;
+
+        // Stage-select screen: show that a stage is being picked.
+        if scene.is_sss() {
+            let (large_image, large_text) = self.player_badge();
+            return Some(PresenceContent {
+                details: mode.to_string(),
+                state: "Choosing a stage".to_string(),
+                large_image,
+                large_text,
+                ..Default::default()
+            });
+        }
+
+        // A loaded stage (e.g. training on a stage) is featured as the large
+        // image, the same way an in-game match is.
+        if let Some(stage_id) = scene.stage() {
+            if let Some(name) = melee::stage_name_internal(stage_id as u16) {
+                return Some(PresenceContent {
+                    details: mode.to_string(),
+                    state: name.to_string(),
+                    large_image: melee::stage_asset_internal(stage_id as u16),
+                    large_text: name.to_string(),
+                    ..Default::default()
+                });
+            }
+        }
+
+        let (large_image, large_text) = self.player_badge();
+
+        Some(PresenceContent {
+            details: mode.to_string(),
+            state: "Offline".to_string(),
+            large_image,
+            large_text,
+            ..Default::default()
+        })
     }
 
     /// Large image + hover text for the opponent-found state: the opponent's
@@ -585,7 +712,7 @@ mod tests {
             ..Default::default()
         };
         let content = runner.content().unwrap();
-        assert_eq!(content.details, "In queue — Ranked");
+        assert_eq!(content.details, "In queue - Ranked");
         assert_eq!(content.party, Some((1, 2)));
     }
 
@@ -600,5 +727,60 @@ mod tests {
         let content = runner.content().unwrap();
         assert_eq!(content.details, "Opponent found");
         assert_eq!(content.state, "vs Mango");
+    }
+
+    /// A CSS scene (Versus major, CSS minor) with Falco hovered on the local
+    /// port renders "Choosing characters" + the character icon.
+    fn falco_css_scene() -> SceneState {
+        SceneState::from_ffi(0x02, 0x00, [0xFF, 0x14, 0xFF, 0xFF], 1, 0)
+    }
+
+    #[test]
+    fn css_scene_renders_choosing_characters_with_hovered_char() {
+        let mut runner = test_runner();
+        runner.scene = falco_css_scene();
+        let content = runner.content().unwrap();
+        assert_eq!(content.details, "Choosing characters");
+        assert_eq!(content.state, "Falco");
+        assert_eq!(content.small_image.as_deref(), Some("char20"));
+    }
+
+    #[test]
+    fn a_live_game_outranks_a_css_scene() {
+        let mut runner = test_runner();
+        runner.scene = falco_css_scene();
+        runner.game = Some(GameState {
+            ended: false,
+            ..Default::default()
+        });
+        // game_details falls back to "Online" for an empty match id.
+        assert_eq!(runner.content().unwrap().details, "Online");
+    }
+
+    #[test]
+    fn active_matchmaking_outranks_a_css_scene() {
+        let mut runner = test_runner();
+        runner.scene = falco_css_scene();
+        runner.matchmaking = state(ProcessState::Matchmaking);
+        assert_eq!(runner.content().unwrap().details, "In queue");
+    }
+
+    #[test]
+    fn idle_with_a_css_scene_shows_the_scene() {
+        let mut runner = test_runner();
+        runner.scene = falco_css_scene();
+        // Idle matchmaking, no game: the scene wins over the "In menus" baseline.
+        assert_eq!(runner.content().unwrap().details, "Choosing characters");
+    }
+
+    #[test]
+    fn returning_to_css_clears_a_finished_game() {
+        let mut runner = test_runner();
+        runner.game = Some(GameState {
+            ended: true,
+            ..Default::default()
+        });
+        runner.handle_scene(falco_css_scene());
+        assert!(runner.game.is_none());
     }
 }

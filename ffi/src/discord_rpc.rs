@@ -51,3 +51,37 @@ pub extern "C" fn slprs_exi_device_update_matchmaking_state(
     // Fall back into a raw pointer so Rust doesn't obliterate the object.
     let _leak = Box::into_raw(device);
 }
+
+/// Pushes the current Melee scene and character-select state to Discord Rich
+/// Presence, mirroring how matchmaking state is pushed. `css_char_ids` points
+/// to four external Melee character IDs (one per port); `0xFF` marks an empty
+/// port. `local_port` is the 0-based port of the local player. The Rust side
+/// edge-detects and only re-renders when something changes.
+#[unsafe(no_mangle)]
+pub extern "C" fn slprs_exi_device_update_scene_state(
+    exi_device_instance_ptr: usize,
+    major_scene: u8,
+    minor_scene: u8,
+    css_char_ids: *const u8,
+    local_port: u8,
+    stage_id: u8,
+) {
+    // Coerce the instance from the pointer. This is theoretically safe since we control
+    // the C++ side and can guarantee that the `exi_device_instance_ptr` is only owned
+    // by the C++ EXI device, and is created/destroyed with the corresponding lifetimes.
+    let device = unsafe { Box::from_raw(exi_device_instance_ptr as *mut SlippiEXIDevice) };
+
+    let char_ids = match css_char_ids.is_null() {
+        true => [0xFF; 4],
+        false => {
+            // The C++ side always passes a fixed four-byte, port-indexed array.
+            let slice = unsafe { std::slice::from_raw_parts(css_char_ids, 4) };
+            [slice[0], slice[1], slice[2], slice[3]]
+        },
+    };
+
+    device.update_scene_state(major_scene, minor_scene, char_ids, local_port, stage_id);
+
+    // Fall back into a raw pointer so Rust doesn't obliterate the object.
+    let _leak = Box::into_raw(device);
+}

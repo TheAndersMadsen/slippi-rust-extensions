@@ -167,4 +167,11 @@ impl SlippiEXIDevice {
             discord_rpc.update_matchmaking_state(process_state, online_mode, non_empty(opponent_name), opponent_rank);
         }
     }
+
+    /// Forwards a scene + character-select snapshot to the Discord presence thread, if active.
+    pub fn update_scene_state(&self, major_scene: u8, minor_scene: u8, char_ids: [u8; 4], local_port: u8, stage_id: u8) {
+        if let Some(discord_rpc) = &self.discord_rpc {
+            discord_rpc.update_scene_state(major_scene, minor_scene, char_ids, local_port, stage_id);
+        }
+    }
 }
